@@ -180,7 +180,7 @@
         .table-wrapper {
             display: flex;
             gap: 0;
-            align-items: stretch;
+            align-items: flex-start;
         }
 
         .delete-column {
@@ -198,22 +198,21 @@
             text-align: center;
             font-weight: 600;
             font-size: 13px;
-            min-height: 51px;
+            height: 51px;
             display: flex;
             align-items: center;
             justify-content: center;
         }
 
         .delete-cell {
-            padding: 8px;
+            padding: 12px 8px;
             border-bottom: 1px solid #ddd;
             display: flex;
             align-items: center;
             justify-content: center;
-            min-height: 49px;
         }
 
-        .delete-cell:last-child {
+        tbody tr:last-child + .delete-cell {
             border-bottom: none;
         }
 
@@ -273,6 +272,7 @@
             font-size: 18px;
             font-weight: bold;
             transition: background 0.2s;
+            min-width: 36px;
         }
 
         .delete-btn:hover {
@@ -441,6 +441,7 @@
                         text: item.str.trim(),
                         x: Math.round(item.transform[4]),
                         y: Math.round(item.transform[5]),
+                        height: item.height,
                         page: pageNum
                     });
                 });
@@ -452,13 +453,14 @@
         function parseTableStructure(items) {
             const events = [];
             
+            // Group items by Y position with tighter tolerance
             const rowMap = new Map();
             items.forEach(item => {
                 if (!item.text) return;
                 
                 let foundRow = false;
                 for (let [y, row] of rowMap) {
-                    if (Math.abs(y - item.y) <= 3) {
+                    if (Math.abs(y - item.y) <= 2) {
                         row.push(item);
                         foundRow = true;
                         break;
@@ -469,18 +471,23 @@
                 }
             });
             
+            // Sort rows by Y position (top to bottom) and items within rows by X
             const rows = Array.from(rowMap.entries())
                 .sort((a, b) => b[0] - a[0])
-                .map(([y, items]) => items.sort((a, b) => a.x - b.x));
+                .map(([y, items]) => ({
+                    y: y,
+                    items: items.sort((a, b) => a.x - b.x)
+                }));
             
             let currentDate = '';
             let currentRawDate = '';
-            let pendingEvent = null;
+            let lastEventY = null;
             
             for (let i = 0; i < rows.length; i++) {
                 const row = rows[i];
-                const rowText = row.map(item => item.text).join(' ');
+                const rowText = row.items.map(item => item.text).join(' ');
                 
+                // Skip noise
                 if (rowText.includes('Time') && rowText.includes('Cur.') && rowText.includes('Event')) continue;
                 if (rowText.includes('investing.com')) continue;
                 if (rowText.includes('Best time to enter')) continue;
@@ -488,84 +495,43 @@
                 if (rowText.includes('Current Time')) continue;
                 if (rowText.includes('Legend')) break;
                 if (rowText.includes('Disclaimer')) break;
-                if (rowText.length < 5) continue;
+                if (rowText.length < 3) continue;
                 
+                // Check for date header
                 const dateMatch = rowText.match(/(Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday),?\s+([A-Z][a-z]+)\s+(\d{1,2}),?\s+(\d{4})/i);
                 if (dateMatch) {
                     currentRawDate = dateMatch[0];
                     currentDate = formatDateHeader(currentRawDate);
-                    pendingEvent = null;
+                    lastEventY = null;
                     continue;
                 }
                 
                 if (!currentDate) continue;
                 
-                const event = parseEventRow(row, currentRawDate, currentDate, rows, i);
-                
-                if (event && event.isComplete) {
-                    if (pendingEvent) {
-                        event.eventName = pendingEvent.eventName + ' ' + event.eventName;
-                    }
+                // Parse event from this row
+                const event = parseEventRow(row.items, currentRawDate, currentDate);
+                if (event) {
                     events.push(event);
-                    pendingEvent = null;
-                } else if (event && !event.isComplete) {
-                    pendingEvent = event;
-                } else if (pendingEvent) {
-                    const continuationText = row.map(item => item.text)
-                        .filter(text => !text.match(/^[★☆✰✩]+$/))
-                        .join(' ');
-                    
-                    const values = extractValuesFromText(continuationText);
-                    if (values.length > 0) {
-                        if (values.length >= 1) pendingEvent.actual = values[values.length - 1];
-                        if (values.length >= 2) pendingEvent.forecast = values[values.length - 2];
-                        if (values.length >= 3) pendingEvent.previous = values[values.length - 3];
-                        pendingEvent.isComplete = true;
-                        events.push(pendingEvent);
-                        pendingEvent = null;
-                    } else if (continuationText.trim().length > 0) {
-                        pendingEvent.eventName += ' ' + continuationText.trim();
-                    }
+                    lastEventY = row.y;
                 }
             }
-            
-            events.sort((a, b) => {
-                if (a.rawDateHeader !== b.rawDateHeader) {
-                    return new Date(a.rawDateHeader) - new Date(b.rawDateHeader);
-                }
-                return a.time.localeCompare(b.time);
-            });
             
             return events;
         }
 
-        function extractValuesFromText(text) {
-            const tokens = text.trim().split(/\s+/);
-            const values = [];
-            
-            for (let i = tokens.length - 1; i >= 0 && values.length < 3; i--) {
-                const token = tokens[i];
-                if (/^-?\d+\.?\d*[%BKM]?$/.test(token)) {
-                    values.unshift(token);
-                } else if (values.length > 0) {
-                    break;
-                }
-            }
-            
-            return values;
-        }
-
-        function parseEventRow(rowItems, rawDateHeader, displayDate, allRows, currentIndex) {
+        function parseEventRow(rowItems, rawDateHeader, displayDate) {
             const texts = rowItems.map(item => item.text);
             
-            if (texts.length < 2) return null;
+            if (texts.length < 3) return null;
             
+            // First item should be time
             const timeMatch = texts[0].match(/^\d{2}:\d{2}$/);
             if (!timeMatch) return null;
             const time = texts[0];
             
-            let currencyIndex = -1;
+            // Second item should be currency
             let currency = '';
+            let currencyIndex = -1;
             for (let i = 1; i < Math.min(5, texts.length); i++) {
                 if (/^[A-Z]{3}$/.test(texts[i])) {
                     currency = texts[i];
@@ -576,11 +542,32 @@
             
             if (!currency) return null;
             
+            // Get country label (remove currency from output)
+            const countryLabel = getCountryLabel(currency, texts.slice(currencyIndex + 1).join(' '));
+            
+            // Everything after currency: filter out stars and extract
             const remainingTexts = texts.slice(currencyIndex + 1)
                 .filter(text => !text.match(/^[★☆✰✩]+$/));
             
-            const values = extractValuesFromText(remainingTexts.join(' '));
+            if (remainingTexts.length === 0) return null;
             
+            // Find where values start from the end
+            const values = [];
+            let valueStartIndex = remainingTexts.length;
+            
+            for (let i = remainingTexts.length - 1; i >= 0 && values.length < 3; i--) {
+                const text = remainingTexts[i];
+                // Check if this is a numeric value
+                if (/^-?\d+\.?\d*[%BKM]?$/.test(text)) {
+                    values.unshift(text);
+                    valueStartIndex = i;
+                } else if (values.length > 0) {
+                    // Stop when we hit non-value after finding values
+                    break;
+                }
+            }
+            
+            // Assign values
             let actual = '-';
             let forecast = '-';
             let previous = '-';
@@ -589,29 +576,21 @@
             if (values.length >= 2) forecast = values[values.length - 2];
             if (values.length >= 3) previous = values[values.length - 3];
             
-            const eventParts = [];
-            for (let i = 0; i < remainingTexts.length; i++) {
-                const text = remainingTexts[i];
-                if (values.includes(text)) {
-                    break;
-                }
-                eventParts.push(text);
-            }
-            
+            // Event name is everything before the values
+            const eventParts = remainingTexts.slice(0, valueStartIndex);
             const eventName = eventParts.join(' ').trim();
-            const countryLabel = getCountryLabel(currency, eventName);
+            
+            if (!eventName) return null;
             
             return {
                 rawDateHeader,
                 displayDate,
                 time,
-                currency,
                 countryLabel,
-                eventName: eventName || '',
+                eventName,
                 actual,
                 forecast,
-                previous,
-                isComplete: eventName.length > 0 && values.length > 0
+                previous
             };
         }
 
