@@ -34,6 +34,12 @@
             font-size: 32px;
         }
 
+        h2 {
+            color: #1a1a1a;
+            margin: 40px 0 20px 0;
+            font-size: 24px;
+        }
+
         .instructions {
             background: #f8f9fa;
             padding: 20px;
@@ -177,6 +183,15 @@
             display: block;
         }
 
+        .excluded-container {
+            display: none;
+            margin-top: 40px;
+        }
+
+        .excluded-container.visible {
+            display: block;
+        }
+
         .table-wrapper {
             display: table;
             width: 100%;
@@ -287,6 +302,7 @@
         <div class="summary" id="summary"></div>
 
         <div class="action-buttons" id="actionButtons">
+            <button id="copyBtn">Copy Table</button>
             <button id="downloadExcel">Download Excel</button>
             <button id="downloadCsv">Download CSV</button>
         </div>
@@ -308,12 +324,25 @@
                 </div>
             </div>
         </div>
+
+        <div class="excluded-container" id="excludedContainer">
+            <h2>Excluded Events (for review)</h2>
+            <div class="table-wrapper" id="excludedWrapper">
+                <div class="table-row header-row">
+                    <div class="data-cell">Date</div>
+                    <div class="data-cell">Event</div>
+                    <div class="data-cell">Actual vs. Forecast vs. Previous</div>
+                    <div class="data-cell">Reason</div>
+                </div>
+            </div>
+        </div>
     </div>
 
     <script>
         pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
 
         let events = [];
+        let excludedEvents = [];
         const pdfFileInput = document.getElementById('pdfFile');
         const parseBtn = document.getElementById('parseBtn');
         const loading = document.getElementById('loading');
@@ -323,7 +352,10 @@
         const actionButtons = document.getElementById('actionButtons');
         const tableContainer = document.getElementById('tableContainer');
         const tableWrapper = document.getElementById('tableWrapper');
+        const excludedContainer = document.getElementById('excludedContainer');
+        const excludedWrapper = document.getElementById('excludedWrapper');
         const groupDatesCheckbox = document.getElementById('groupDates');
+        const copyBtn = document.getElementById('copyBtn');
         const downloadExcel = document.getElementById('downloadExcel');
         const downloadCsv = document.getElementById('downloadCsv');
 
@@ -339,20 +371,30 @@
             hideError();
             hideSummary();
             hideTable();
+            hideExcluded();
             hideControls();
             hideActionButtons();
 
             try {
-                const rawText = await extractPdfText(file);
-                console.log('Raw text:', rawText);
-                events = parseEconomicCalendar(rawText);
-                console.log('Parsed events:', events);
+                const pdfStructure = await extractPdfStructured(file);
+                const allEvents = parseEconomicCalendar(pdfStructure);
+                
+                // Filter events
+                const filtered = filterEvents(allEvents);
+                events = filtered.included;
+                excludedEvents = filtered.excluded;
+                
+                console.log('Included events:', events);
+                console.log('Excluded events:', excludedEvents);
                 
                 if (events.length === 0) {
-                    showError('No events found in the PDF. Please check the file format.');
+                    showError('No events found in the PDF after filtering.');
                 } else {
-                    showSummary(`Parsed ${events.length} events.`);
+                    showSummary(`Parsed ${events.length} events. ${excludedEvents.length} events excluded.`);
                     renderTable(events);
+                    if (excludedEvents.length > 0) {
+                        renderExcludedTable(excludedEvents);
+                    }
                     showControls();
                     showActionButtons();
                 }
@@ -366,6 +408,13 @@
 
         groupDatesCheckbox.addEventListener('change', () => {
             renderTable(events);
+            if (excludedEvents.length > 0) {
+                renderExcludedTable(excludedEvents);
+            }
+        });
+
+        copyBtn.addEventListener('click', () => {
+            copyTableToClipboard();
         });
 
         downloadExcel.addEventListener('click', () => {
@@ -376,165 +425,188 @@
             downloadAsCsv();
         });
 
-        async function extractPdfText(file) {
+        async function extractPdfStructured(file) {
             const arrayBuffer = await file.arrayBuffer();
             const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
             
-            let fullText = '';
+            const structure = {
+                pages: []
+            };
+            
             for (let pageNum = 1; pageNum <= pdf.numPages; pageNum++) {
                 const page = await pdf.getPage(pageNum);
                 const textContent = await page.getTextContent();
                 
-                const pageText = textContent.items.map(item => item.str).join('\n');
-                fullText += pageText + '\n';
+                const items = textContent.items.map(item => ({
+                    text: item.str.trim(),
+                    x: Math.round(item.transform[4]),
+                    y: Math.round(item.transform[5])
+                }));
+                
+                structure.pages.push(items);
             }
             
-            return fullText;
+            return structure;
         }
 
-        function parseEconomicCalendar(text) {
-            const lines = text.split('\n').map(l => l.trim()).filter(l => l.length > 0);
+        function parseEconomicCalendar(structure) {
             const events = [];
             let currentDate = '';
             let currentRawDate = '';
-            let i = 0;
             
-            while (i < lines.length) {
-                const line = lines[i];
+            // Flatten all pages
+            const allItems = structure.pages.flat();
+            
+            // Group by Y coordinate to find rows
+            const rowMap = new Map();
+            allItems.forEach(item => {
+                if (!item.text) return;
                 
-                // Stop at Legend
-                if (line === 'Legend' || line.includes('Disclaimer')) {
-                    break;
+                let foundRow = false;
+                for (let [y, row] of rowMap) {
+                    if (Math.abs(y - item.y) <= 2) {
+                        row.push(item);
+                        foundRow = true;
+                        break;
+                    }
                 }
-                
-                // Skip noise lines
-                if (line.includes('investing.com') || 
-                    line.includes('Economic Calendar') ||
-                    line.includes('Best time to enter') ||
-                    line.includes('Try Now') ||
-                    line.includes('Current Time') ||
-                    (line.includes('Time') && line.includes('Cur.') && line.includes('Event'))) {
-                    i++;
-                    continue;
+                if (!foundRow) {
+                    rowMap.set(item.y, [item]);
                 }
+            });
+            
+            // Sort rows top to bottom
+            const rows = Array.from(rowMap.values())
+                .sort((a, b) => Math.max(...b.map(i => i.y)) - Math.max(...a.map(i => i.y)))
+                .map(row => row.sort((a, b) => a.x - b.x));
+            
+            for (let rowIdx = 0; rowIdx < rows.length; rowIdx++) {
+                const row = rows[rowIdx];
+                const texts = row.map(item => item.text);
+                const fullText = texts.join(' ');
                 
-                // Check for date header
-                const dateMatch = line.match(/^(Sunday|Monday|Tuesday|Wednesday|Thursday|Friday|Saturday),\s+([A-Za-z]+)\s+(\d{1,2}),\s+(\d{4})$/);
+                // Skip noise
+                if (fullText.includes('Legend') || fullText.includes('Disclaimer')) break;
+                if (fullText.includes('investing.com') || 
+                    fullText.includes('Best time') || 
+                    fullText.includes('Try Now') ||
+                    fullText.includes('Current Time') ||
+                    (fullText.includes('Time') && fullText.includes('Cur.'))) continue;
+                
+                // Check for date
+                const dateMatch = fullText.match(/(Sunday|Monday|Tuesday|Wednesday|Thursday|Friday|Saturday),\s+([A-Za-z]+)\s+(\d{1,2}),\s+(\d{4})/);
                 if (dateMatch) {
-                    currentRawDate = line;
-                    currentDate = formatDateHeader(line);
-                    i++;
+                    currentRawDate = dateMatch[0];
+                    currentDate = formatDateHeader(currentRawDate);
                     continue;
                 }
                 
-                if (!currentDate) {
-                    i++;
-                    continue;
+                if (!currentDate || texts.length < 3) continue;
+                
+                // Check if row starts with time
+                if (!/^\d{2}:\d{2}$/.test(texts[0])) continue;
+                
+                const time = texts[0];
+                
+                // Find currency (should be at specific X position, around column 2)
+                let currency = '';
+                let currencyIdx = -1;
+                for (let i = 1; i < Math.min(3, texts.length); i++) {
+                    if (/^[A-Z]{3}$/.test(texts[i])) {
+                        currency = texts[i];
+                        currencyIdx = i;
+                        break;
+                    }
                 }
                 
-                // Check if line starts with time (HH:MM)
-                if (/^\d{2}:\d{2}$/.test(line)) {
-                    const time = line;
-                    i++;
-                    
-                    // Next line should be currency
-                    if (i >= lines.length) break;
-                    const currency = lines[i];
-                    if (!/^[A-Z]{3}$/.test(currency)) {
-                        continue;
-                    }
-                    i++;
-                    
-                    // Collect event name lines until we hit values or next time
-                    const eventLines = [];
-                    while (i < lines.length) {
-                        const nextLine = lines[i];
-                        
-                        // Stop if we hit next time or date
-                        if (/^\d{2}:\d{2}$/.test(nextLine) || 
-                            /^(Sunday|Monday|Tuesday|Wednesday|Thursday|Friday|Saturday),/.test(nextLine)) {
-                            break;
-                        }
-                        
-                        // Stop if we hit noise
-                        if (nextLine.includes('Best time') || 
-                            nextLine === 'Legend' ||
-                            nextLine.includes('Try Now')) {
-                            break;
-                        }
-                        
-                        eventLines.push(nextLine);
-                        i++;
-                        
-                        // Check if this line contains numeric values - if so, this is the last line
-                        if (/\d+\.?\d*[%BKM]?/.test(nextLine)) {
-                            break;
-                        }
-                    }
-                    
-                    if (eventLines.length === 0) continue;
-                    
-                    // Parse event and values from collected lines
-                    const event = parseEventFromLines(eventLines, time, currency, currentRawDate, currentDate);
-                    if (event) {
-                        events.push(event);
-                    }
-                } else {
-                    i++;
-                }
+                if (!currency) continue;
+                
+                // Find where Actual/Forecast/Previous columns are (rightmost items)
+                // X positions: Actual ~750-850, Forecast ~850-950, Previous ~950-1050
+                const actualItems = row.filter(item => item.x >= 700 && item.x < 850 && /^-?\d+\.?\d*[%BKM]?$/.test(item.text));
+                const forecastItems = row.filter(item => item.x >= 850 && item.x < 950 && /^-?\d+\.?\d*[%BKM]?$/.test(item.text));
+                const previousItems = row.filter(item => item.x >= 950 && /^-?\d+\.?\d*[%BKM]?$/.test(item.text));
+                
+                const actual = actualItems.length > 0 ? actualItems[0].text : '-';
+                const forecast = forecastItems.length > 0 ? forecastItems[0].text : '-';
+                const previous = previousItems.length > 0 ? previousItems[0].text : '-';
+                
+                // Event name is everything between currency and value columns
+                const eventItems = row.filter(item => {
+                    const isCurrency = item.text === currency;
+                    const isTime = item.text === time;
+                    const isValue = item.x >= 700;
+                    const isStar = /^[★☆✰✩]+$/.test(item.text);
+                    return !isCurrency && !isTime && !isValue && !isStar && item.text.length > 0;
+                });
+                
+                const eventName = eventItems.map(item => item.text).join(' ').trim();
+                
+                if (!eventName) continue;
+                
+                const countryLabel = getCountryLabel(currency, eventName);
+                
+                events.push({
+                    rawDateHeader,
+                    displayDate: currentDate,
+                    time,
+                    currency,
+                    countryLabel,
+                    eventName,
+                    actual,
+                    forecast,
+                    previous
+                });
             }
             
             return events;
         }
 
-        function parseEventFromLines(lines, time, currency, rawDateHeader, displayDate) {
-            // Join all lines
-            const fullText = lines.join(' ').trim();
+        function filterEvents(allEvents) {
+            const included = [];
+            const excluded = [];
             
-            // Extract values from the end (up to 3 numeric values)
-            const tokens = fullText.split(/\s+/);
-            const values = [];
-            let valueEndIndex = tokens.length;
+            const excludeKeywords = [
+                'bill auction',
+                'money supply',
+                'house',
+                'oil',
+                'cftc',
+                'coincident'
+            ];
             
-            for (let i = tokens.length - 1; i >= 0 && values.length < 3; i--) {
-                const token = tokens[i];
-                if (/^-?\d+\.?\d*[%BKM]?$/.test(token)) {
-                    values.unshift(token);
-                    valueEndIndex = i;
-                } else if (values.length > 0) {
-                    break;
+            const excludeCurrencies = ['AUD', 'NZD', 'HKD'];
+            const interestRateKeywords = ['interest rate', 'rate decision'];
+            
+            allEvents.forEach(event => {
+                const eventLower = event.eventName.toLowerCase();
+                const fullEventText = `${event.countryLabel} ${event.eventName}`.toLowerCase();
+                
+                // Check exclude keywords
+                let excludeReason = '';
+                for (const keyword of excludeKeywords) {
+                    if (eventLower.includes(keyword) || fullEventText.includes(keyword)) {
+                        excludeReason = `Contains keyword: ${keyword}`;
+                        break;
+                    }
                 }
-            }
+                
+                // Check AUD/NZD/HKD exclusion (except interest rate)
+                if (!excludeReason && excludeCurrencies.includes(event.currency)) {
+                    const hasInterestRate = interestRateKeywords.some(kw => eventLower.includes(kw));
+                    if (!hasInterestRate) {
+                        excludeReason = `${event.currency} event (not interest rate)`;
+                    }
+                }
+                
+                if (excludeReason) {
+                    excluded.push({ ...event, excludeReason });
+                } else {
+                    included.push(event);
+                }
+            });
             
-            // Event name is everything before the values
-            const eventTokens = tokens.slice(0, valueEndIndex);
-            const eventName = eventTokens.join(' ').trim();
-            
-            if (!eventName) return null;
-            
-            // Get country label
-            const countryLabel = getCountryLabel(currency, eventName);
-            
-            // Assign values
-            let actual = '-';
-            let forecast = '-';
-            let previous = '-';
-            
-            if (values.length >= 1) actual = values[values.length - 1];
-            if (values.length >= 2) forecast = values[values.length - 2];
-            if (values.length >= 3) previous = values[values.length - 3];
-            
-            return {
-                rawDateHeader,
-                displayDate,
-                time,
-                currency,
-                countryLabel,
-                eventName,
-                actual,
-                forecast,
-                previous
-            };
+            return { included, excluded };
         }
 
         function formatDateHeader(dateStr) {
@@ -595,7 +667,6 @@
         function renderTable(events) {
             if (events.length === 0) return;
 
-            // Remove all rows except header
             while (tableWrapper.children.length > 1) {
                 tableWrapper.removeChild(tableWrapper.lastChild);
             }
@@ -644,16 +715,79 @@
             showTable();
         }
 
+        function renderExcludedTable(excludedEvents) {
+            while (excludedWrapper.children.length > 1) {
+                excludedWrapper.removeChild(excludedWrapper.lastChild);
+            }
+
+            const groupDates = groupDatesCheckbox.checked;
+            let lastDisplayDate = '';
+
+            excludedEvents.forEach((event) => {
+                const row = document.createElement('div');
+                row.className = 'table-row';
+
+                const dateCell = document.createElement('div');
+                dateCell.className = 'data-cell';
+                if (groupDates) {
+                    if (event.displayDate !== lastDisplayDate) {
+                        dateCell.textContent = event.displayDate;
+                        lastDisplayDate = event.displayDate;
+                    }
+                } else {
+                    dateCell.textContent = event.displayDate;
+                }
+                row.appendChild(dateCell);
+
+                const eventCell = document.createElement('div');
+                eventCell.className = 'data-cell';
+                eventCell.textContent = `${event.countryLabel} ${event.eventName}`;
+                row.appendChild(eventCell);
+
+                const afpCell = document.createElement('div');
+                afpCell.className = 'data-cell';
+                afpCell.textContent = `${event.actual} vs ${event.forecast} vs ${event.previous}`;
+                row.appendChild(afpCell);
+
+                const reasonCell = document.createElement('div');
+                reasonCell.className = 'data-cell';
+                reasonCell.textContent = event.excludeReason;
+                row.appendChild(reasonCell);
+
+                excludedWrapper.appendChild(row);
+            });
+
+            showExcluded();
+        }
+
         function deleteEvent(index) {
             events.splice(index, 1);
             renderTable(events);
-            showSummary(`Parsed ${events.length} events.`);
+            showSummary(`Parsed ${events.length} events. ${excludedEvents.length} events excluded.`);
             
             if (events.length === 0) {
                 hideTable();
                 hideControls();
                 hideActionButtons();
             }
+        }
+
+        function copyTableToClipboard() {
+            const range = document.createRange();
+            range.selectNode(tableWrapper);
+            
+            const selection = window.getSelection();
+            selection.removeAllRanges();
+            selection.addRange(range);
+            
+            try {
+                document.execCommand('copy');
+                alert('Table copied to clipboard! You can now paste it into PowerPoint.');
+            } catch (err) {
+                alert('Failed to copy. Please select the table manually and use Ctrl+C.');
+            }
+            
+            selection.removeAllRanges();
         }
 
         function downloadAsExcel() {
@@ -744,6 +878,14 @@
 
         function hideTable() {
             tableContainer.classList.remove('visible');
+        }
+
+        function showExcluded() {
+            excludedContainer.classList.add('visible');
+        }
+
+        function hideExcluded() {
+            excludedContainer.classList.remove('visible');
         }
 
         function showControls() {
