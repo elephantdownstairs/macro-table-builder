@@ -1,0 +1,646 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Weekly Macro Table Builder</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+            padding: 40px 20px;
+            background: #f5f5f5;
+            color: #333;
+        }
+
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+            background: white;
+            padding: 40px;
+            border-radius: 8px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+        }
+
+        h1 {
+            color: #1a1a1a;
+            margin-bottom: 30px;
+            font-size: 32px;
+        }
+
+        .instructions {
+            background: #f8f9fa;
+            padding: 20px;
+            border-radius: 6px;
+            margin-bottom: 30px;
+            border-left: 4px solid #007bff;
+        }
+
+        .instructions h2 {
+            font-size: 18px;
+            margin-bottom: 12px;
+            color: #495057;
+        }
+
+        .instructions ol {
+            margin-left: 20px;
+            line-height: 1.8;
+        }
+
+        .upload-section {
+            margin-bottom: 30px;
+        }
+
+        .file-input-wrapper {
+            display: flex;
+            gap: 15px;
+            align-items: center;
+            margin-bottom: 15px;
+        }
+
+        input[type="file"] {
+            padding: 10px;
+            border: 2px solid #ddd;
+            border-radius: 4px;
+            flex: 1;
+            max-width: 400px;
+        }
+
+        button {
+            background: #007bff;
+            color: white;
+            border: none;
+            padding: 12px 24px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 16px;
+            font-weight: 500;
+            transition: background 0.2s;
+        }
+
+        button:hover {
+            background: #0056b3;
+        }
+
+        button:disabled {
+            background: #ccc;
+            cursor: not-allowed;
+        }
+
+        .controls {
+            margin: 20px 0;
+            padding: 15px;
+            background: #f8f9fa;
+            border-radius: 6px;
+            display: none;
+        }
+
+        .controls.visible {
+            display: block;
+        }
+
+        .checkbox-wrapper {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .checkbox-wrapper input[type="checkbox"] {
+            width: 18px;
+            height: 18px;
+            cursor: pointer;
+        }
+
+        .checkbox-wrapper label {
+            cursor: pointer;
+            user-select: none;
+        }
+
+        .summary {
+            margin: 20px 0;
+            padding: 12px;
+            background: #d4edda;
+            border: 1px solid #c3e6cb;
+            border-radius: 4px;
+            color: #155724;
+            display: none;
+        }
+
+        .summary.visible {
+            display: block;
+        }
+
+        .error {
+            margin: 20px 0;
+            padding: 12px;
+            background: #f8d7da;
+            border: 1px solid #f5c6cb;
+            border-radius: 4px;
+            color: #721c24;
+            display: none;
+        }
+
+        .error.visible {
+            display: block;
+        }
+
+        .table-wrapper {
+            overflow-x: auto;
+            margin-top: 20px;
+        }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            background: white;
+            display: none;
+        }
+
+        table.visible {
+            display: table;
+        }
+
+        thead {
+            background: #FDB913;
+            color: #1a1a1a;
+            font-weight: 600;
+        }
+
+        th {
+            padding: 14px 12px;
+            text-align: left;
+            border: 1px solid #ddd;
+            font-size: 15px;
+        }
+
+        th:first-child {
+            width: 60px;
+            text-align: center;
+        }
+
+        th:nth-child(2) {
+            width: 140px;
+        }
+
+        td {
+            padding: 12px;
+            border: 1px solid #ddd;
+            vertical-align: top;
+        }
+
+        tbody tr:nth-child(even) {
+            background: #FFF8E6;
+        }
+
+        tbody tr:nth-child(odd) {
+            background: white;
+        }
+
+        tbody tr:hover {
+            background: #FFE5B4;
+        }
+
+        .delete-btn {
+            background: #dc3545;
+            color: white;
+            border: none;
+            padding: 6px 12px;
+            border-radius: 3px;
+            cursor: pointer;
+            font-size: 18px;
+            font-weight: bold;
+            transition: background 0.2s;
+        }
+
+        .delete-btn:hover {
+            background: #c82333;
+        }
+
+        .loading {
+            display: none;
+            margin: 20px 0;
+            padding: 12px;
+            background: #cce5ff;
+            border: 1px solid #b8daff;
+            border-radius: 4px;
+            color: #004085;
+        }
+
+        .loading.visible {
+            display: block;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Weekly Macro Table Builder</h1>
+        
+        <div class="instructions">
+            <h2>Instructions:</h2>
+            <ol>
+                <li>Export the Investing.com Economic Calendar as a PDF</li>
+                <li>Upload the PDF using the button below</li>
+                <li>Click "Parse PDF & Generate Table"</li>
+                <li>Select rows you want and copy the table into PowerPoint</li>
+            </ol>
+        </div>
+
+        <div class="upload-section">
+            <div class="file-input-wrapper">
+                <input type="file" id="pdfFile" accept="application/pdf">
+                <button id="parseBtn" disabled>Parse PDF & Generate Table</button>
+            </div>
+        </div>
+
+        <div class="loading" id="loading">Processing PDF...</div>
+        <div class="error" id="error"></div>
+        <div class="summary" id="summary"></div>
+
+        <div class="controls" id="controls">
+            <div class="checkbox-wrapper">
+                <input type="checkbox" id="groupDates" checked>
+                <label for="groupDates">Group dates (show date only on first row of each day)</label>
+            </div>
+        </div>
+
+        <div class="table-wrapper">
+            <table id="eventsTable">
+                <thead>
+                    <tr>
+                        <th>Delete</th>
+                        <th>Date</th>
+                        <th>Event</th>
+                        <th>Actual vs. Forecast vs. Previous</th>
+                    </tr>
+                </thead>
+                <tbody id="tableBody">
+                </tbody>
+            </table>
+        </div>
+    </div>
+
+    <script>
+        // Set up PDF.js worker
+        pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+
+        let events = [];
+        const pdfFileInput = document.getElementById('pdfFile');
+        const parseBtn = document.getElementById('parseBtn');
+        const loading = document.getElementById('loading');
+        const error = document.getElementById('error');
+        const summary = document.getElementById('summary');
+        const controls = document.getElementById('controls');
+        const eventsTable = document.getElementById('eventsTable');
+        const tableBody = document.getElementById('tableBody');
+        const groupDatesCheckbox = document.getElementById('groupDates');
+
+        // Enable parse button when file is selected
+        pdfFileInput.addEventListener('change', (e) => {
+            parseBtn.disabled = !e.target.files.length;
+        });
+
+        // Parse button click handler
+        parseBtn.addEventListener('click', async () => {
+            const file = pdfFileInput.files[0];
+            if (!file) return;
+
+            showLoading(true);
+            hideError();
+            hideSummary();
+            hideTable();
+            hideControls();
+
+            try {
+                const rawText = await loadPdf(file);
+                events = parseEvents(rawText);
+                
+                if (events.length === 0) {
+                    showError('No events found in the PDF. Please check the file format.');
+                } else {
+                    showSummary(`Parsed ${events.length} events.`);
+                    renderTable(events);
+                    showControls();
+                }
+            } catch (err) {
+                console.error('Error processing PDF:', err);
+                showError('Error processing PDF: ' + err.message);
+            } finally {
+                showLoading(false);
+            }
+        });
+
+        // Group dates checkbox handler
+        groupDatesCheckbox.addEventListener('change', () => {
+            renderTable(events);
+        });
+
+        // Load PDF and extract text
+        async function loadPdf(file) {
+            const arrayBuffer = await file.arrayBuffer();
+            const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
+            
+            let fullText = '';
+            for (let i = 1; i <= pdf.numPages; i++) {
+                const page = await pdf.getPage(i);
+                const textContent = await page.getTextContent();
+                const pageText = textContent.items.map(item => item.str).join(' ');
+                fullText += pageText + '\n';
+            }
+            
+            return fullText;
+        }
+
+        // Parse events from raw PDF text
+        function parseEvents(rawText) {
+            const lines = rawText.split('\n').map(l => l.trim()).filter(l => l);
+            const parsedEvents = [];
+            let currentDate = '';
+            let currentRawDate = '';
+
+            // Patterns to ignore
+            const ignorePatterns = [
+                /^Time\s+Cur\.\s+Imp\.\s+Event/i,
+                /^Legend$/i,
+                /^Disclaimer/i,
+                /^Speech$/i,
+                /^Preliminary Release$/i,
+                /^Revised Release$/i,
+                /^Retrieving Data$/i,
+                /^Report$/i,
+                /Low Volatility Expected/i,
+                /Moderate Volatility Expected/i,
+                /High Volatility Expected/i,
+                /investing\.com/i,
+                /Economic Calendar/i,
+                /Add to your site/i,
+                /Fusion Media/i,
+                /Best time to enter/i,
+                /Try Now/i,
+                /Current Time/i,
+                /^\d{2}\/\d{2}\/\d{4}/,
+                /^page\s+\d+\/\d+$/i
+            ];
+
+            for (let line of lines) {
+                // Skip ignored patterns
+                if (ignorePatterns.some(pattern => pattern.test(line))) {
+                    continue;
+                }
+
+                // Check if this is a date header
+                const dateMatch = line.match(/^(Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday),\s+(\w+)\s+(\d{1,2}),\s+(\d{4})$/i);
+                if (dateMatch) {
+                    currentRawDate = line;
+                    currentDate = formatDateHeader(line);
+                    continue;
+                }
+
+                // Try to parse as event row
+                const eventData = parseEventLine(line, currentRawDate, currentDate);
+                if (eventData) {
+                    parsedEvents.push(eventData);
+                }
+            }
+
+            // Sort by date then time
+            parsedEvents.sort((a, b) => {
+                if (a.rawDateHeader !== b.rawDateHeader) {
+                    return new Date(a.rawDateHeader) - new Date(b.rawDateHeader);
+                }
+                return a.time.localeCompare(b.time);
+            });
+
+            return parsedEvents;
+        }
+
+        // Parse a single event line
+        function parseEventLine(line, rawDateHeader, displayDate) {
+            if (!displayDate) return null;
+
+            // Split line into tokens
+            const tokens = line.split(/\s+/);
+            if (tokens.length < 3) return null;
+
+            // First token should be time HH:MM
+            const timeMatch = tokens[0].match(/^\d{2}:\d{2}$/);
+            if (!timeMatch) return null;
+            const time = tokens[0];
+
+            // Second token should be 3-letter currency code
+            const currency = tokens[1];
+            if (!/^[A-Z]{3}$/.test(currency)) return null;
+
+            // Extract actual, forecast, previous from the end
+            let actual = '-';
+            let forecast = '-';
+            let previous = '-';
+            let eventEndIndex = tokens.length;
+
+            // Look for numeric values from the end
+            const values = [];
+            for (let i = tokens.length - 1; i >= 2; i--) {
+                const token = tokens[i];
+                // Check if this looks like a value (number, percentage, or ends with B/K/M)
+                if (/^-?\d+(\.\d+)?[%BKM]?$/.test(token) || token === '-') {
+                    values.unshift(token);
+                    eventEndIndex = i;
+                    if (values.length >= 3) break;
+                } else {
+                    break;
+                }
+            }
+
+            // Assign values
+            if (values.length >= 1) actual = values[values.length - 1];
+            if (values.length >= 2) forecast = values[values.length - 2];
+            if (values.length >= 3) previous = values[values.length - 3];
+
+            // Everything between currency and values is the event name
+            const eventTokens = tokens.slice(2, eventEndIndex);
+            if (eventTokens.length === 0) return null;
+            const eventName = eventTokens.join(' ');
+
+            // Map currency to country label
+            const countryLabel = getCountryLabel(currency, eventName);
+
+            return {
+                rawDateHeader,
+                displayDate,
+                time,
+                currency,
+                countryLabel,
+                eventName,
+                actual,
+                forecast,
+                previous
+            };
+        }
+
+        // Format date header to "25th November" format
+        function formatDateHeader(dateStr) {
+            const match = dateStr.match(/(\w+),\s+(\w+)\s+(\d{1,2}),\s+(\d{4})/i);
+            if (!match) return dateStr;
+
+            const month = match[2];
+            const day = parseInt(match[3]);
+            const ordinal = getOrdinalSuffix(day);
+
+            return `${day}${ordinal} ${month}`;
+        }
+
+        // Get ordinal suffix for day number
+        function getOrdinalSuffix(day) {
+            if (day >= 11 && day <= 13) return 'th';
+            const lastDigit = day % 10;
+            if (lastDigit === 1) return 'st';
+            if (lastDigit === 2) return 'nd';
+            if (lastDigit === 3) return 'rd';
+            return 'th';
+        }
+
+        // Map currency to country label
+        function getCountryLabel(currency, eventName) {
+            const currencyMap = {
+                'USD': 'United States',
+                'GBP': 'United Kingdom',
+                'KRW': 'South Korea',
+                'MYR': 'Malaysia',
+                'SGD': 'Singapore',
+                'CNY': 'China',
+                'AUD': 'Australia',
+                'NZD': 'New Zealand',
+                'JPY': 'Japan',
+                'INR': 'India',
+                'HKD': 'Hong Kong',
+                'CAD': 'Canada',
+                'CHF': 'Switzerland',
+                'SEK': 'Sweden',
+                'NOK': 'Norway',
+                'DKK': 'Denmark',
+                'ZAR': 'South Africa',
+                'BRL': 'Brazil',
+                'MXN': 'Mexico',
+                'THB': 'Thailand',
+                'IDR': 'Indonesia',
+                'PHP': 'Philippines',
+                'TWD': 'Taiwan'
+            };
+
+            // Special case for EUR
+            if (currency === 'EUR') {
+                const isGermanEvent = /german|germany/i.test(eventName);
+                return isGermanEvent ? 'Germany' : 'Eurozone';
+            }
+
+            return currencyMap[currency] || currency;
+        }
+
+        // Render the table
+        function renderTable(events) {
+            if (events.length === 0) return;
+
+            const groupDates = groupDatesCheckbox.checked;
+            let lastDisplayDate = '';
+
+            tableBody.innerHTML = '';
+
+            events.forEach((event, index) => {
+                const row = document.createElement('tr');
+                
+                // Delete button cell
+                const deleteCell = document.createElement('td');
+                deleteCell.style.textAlign = 'center';
+                const deleteBtn = document.createElement('button');
+                deleteBtn.className = 'delete-btn';
+                deleteBtn.textContent = '×';
+                deleteBtn.onclick = () => deleteEvent(index);
+                deleteCell.appendChild(deleteBtn);
+                row.appendChild(deleteCell);
+
+                // Date cell
+                const dateCell = document.createElement('td');
+                if (groupDates) {
+                    if (event.displayDate !== lastDisplayDate) {
+                        dateCell.textContent = event.displayDate;
+                        lastDisplayDate = event.displayDate;
+                    }
+                } else {
+                    dateCell.textContent = event.displayDate;
+                }
+                row.appendChild(dateCell);
+
+                // Event cell (Country + Event Name)
+                const eventCell = document.createElement('td');
+                eventCell.textContent = `${event.countryLabel} ${event.eventName}`;
+                row.appendChild(eventCell);
+
+                // AFP cell
+                const afpCell = document.createElement('td');
+                afpCell.textContent = `${event.actual} vs ${event.forecast} vs ${event.previous}`;
+                row.appendChild(afpCell);
+
+                tableBody.appendChild(row);
+            });
+
+            showTable();
+        }
+
+        // Delete an event
+        function deleteEvent(index) {
+            events.splice(index, 1);
+            renderTable(events);
+            showSummary(`Parsed ${events.length} events.`);
+            
+            if (events.length === 0) {
+                hideTable();
+                hideControls();
+            }
+        }
+
+        // UI helper functions
+        function showLoading(show) {
+            loading.classList.toggle('visible', show);
+        }
+
+        function showError(message) {
+            error.textContent = message;
+            error.classList.add('visible');
+        }
+
+        function hideError() {
+            error.classList.remove('visible');
+        }
+
+        function showSummary(message) {
+            summary.textContent = message;
+            summary.classList.add('visible');
+        }
+
+        function hideSummary() {
+            summary.classList.remove('visible');
+        }
+
+        function showTable() {
+            eventsTable.classList.add('visible');
+        }
+
+        function hideTable() {
+            eventsTable.classList.remove('visible');
+        }
+
+        function showControls() {
+            controls.classList.add('visible');
+        }
+
+        function hideControls() {
+            controls.classList.remove('visible');
+        }
+    </script>
+</body>
+</html>
