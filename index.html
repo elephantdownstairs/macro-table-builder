@@ -20,7 +20,7 @@
         }
 
         .container {
-            max-width: 1400px;
+            max-width: 1600px;
             margin: 0 auto;
             background: white;
             padding: 40px;
@@ -178,88 +178,55 @@
         }
 
         .table-wrapper {
-            display: flex;
-            gap: 0;
-            align-items: flex-start;
-        }
-
-        .delete-column {
-            display: flex;
-            flex-direction: column;
-            background: #f8f9fa;
-            border: 1px solid #ddd;
-            border-right: none;
-        }
-
-        .delete-header {
-            padding: 14px 8px;
-            background: #e9ecef;
-            border-bottom: 1px solid #ddd;
-            text-align: center;
-            font-weight: 600;
-            font-size: 13px;
-            height: 51px;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-        }
-
-        .delete-cell {
-            padding: 12px 8px;
-            border-bottom: 1px solid #ddd;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-        }
-
-        tbody tr:last-child + .delete-cell {
-            border-bottom: none;
-        }
-
-        .data-table-wrapper {
-            flex: 1;
-            overflow-x: auto;
-        }
-
-        table {
+            display: table;
             width: 100%;
-            border-collapse: collapse;
-            background: white;
+            border-collapse: separate;
+            border-spacing: 0;
         }
 
-        thead {
+        .table-row {
+            display: table-row;
+        }
+
+        .table-row.header-row {
             background: #FDB913;
-            color: #1a1a1a;
             font-weight: 600;
         }
 
-        th {
-            padding: 14px 12px;
-            text-align: left;
-            border: 1px solid #ddd;
-            font-size: 15px;
-        }
-
-        th:first-child {
-            width: 140px;
-        }
-
-        td {
-            padding: 12px;
-            border: 1px solid #ddd;
-            vertical-align: top;
-        }
-
-        tbody tr:nth-child(even) {
+        .table-row:not(.header-row):nth-child(even) .data-cell {
             background: #FFF8E6;
         }
 
-        tbody tr:nth-child(odd) {
+        .table-row:not(.header-row):nth-child(odd) .data-cell {
             background: white;
         }
 
-        tbody tr:hover {
+        .table-row:not(.header-row):hover .data-cell {
             background: #FFE5B4;
+        }
+
+        .delete-cell, .data-cell {
+            display: table-cell;
+            padding: 12px;
+            border: 1px solid #ddd;
+            vertical-align: middle;
+        }
+
+        .delete-cell {
+            width: 60px;
+            text-align: center;
+            background: #f8f9fa !important;
+            border-right: 2px solid #dee2e6;
+        }
+
+        .header-row .delete-cell {
+            background: #e9ecef !important;
+            font-weight: 600;
+            font-size: 13px;
+        }
+
+        .data-cell:first-of-type {
+            width: 140px;
         }
 
         .delete-btn {
@@ -304,7 +271,7 @@
                 <li>Export the Investing.com Economic Calendar as a PDF</li>
                 <li>Upload the PDF using the button below</li>
                 <li>Click "Parse PDF & Generate Table"</li>
-                <li>Select rows you want and copy the table into PowerPoint</li>
+                <li>Select the table (not the delete column) and copy into PowerPoint</li>
             </ol>
         </div>
 
@@ -320,7 +287,6 @@
         <div class="summary" id="summary"></div>
 
         <div class="action-buttons" id="actionButtons">
-            <button id="copyBtn">Copy Table</button>
             <button id="downloadExcel">Download Excel</button>
             <button id="downloadCsv">Download CSV</button>
         </div>
@@ -333,22 +299,12 @@
         </div>
 
         <div class="table-container" id="tableContainer">
-            <div class="table-wrapper">
-                <div class="delete-column" id="deleteColumn">
-                    <div class="delete-header">Del</div>
-                </div>
-                <div class="data-table-wrapper">
-                    <table id="eventsTable">
-                        <thead>
-                            <tr>
-                                <th>Date</th>
-                                <th>Event</th>
-                                <th>Actual vs. Forecast vs. Previous</th>
-                            </tr>
-                        </thead>
-                        <tbody id="tableBody">
-                        </tbody>
-                    </table>
+            <div class="table-wrapper" id="tableWrapper">
+                <div class="table-row header-row">
+                    <div class="delete-cell">Del</div>
+                    <div class="data-cell">Date</div>
+                    <div class="data-cell">Event</div>
+                    <div class="data-cell">Actual vs. Forecast vs. Previous</div>
                 </div>
             </div>
         </div>
@@ -366,11 +322,8 @@
         const controls = document.getElementById('controls');
         const actionButtons = document.getElementById('actionButtons');
         const tableContainer = document.getElementById('tableContainer');
-        const eventsTable = document.getElementById('eventsTable');
-        const tableBody = document.getElementById('tableBody');
-        const deleteColumn = document.getElementById('deleteColumn');
+        const tableWrapper = document.getElementById('tableWrapper');
         const groupDatesCheckbox = document.getElementById('groupDates');
-        const copyBtn = document.getElementById('copyBtn');
         const downloadExcel = document.getElementById('downloadExcel');
         const downloadCsv = document.getElementById('downloadCsv');
 
@@ -390,8 +343,9 @@
             hideActionButtons();
 
             try {
-                const pdfData = await loadPdfStructured(file);
-                events = parseTableStructure(pdfData);
+                const rawText = await extractPdfText(file);
+                console.log('Raw text:', rawText);
+                events = parseEconomicCalendar(rawText);
                 console.log('Parsed events:', events);
                 
                 if (events.length === 0) {
@@ -414,10 +368,6 @@
             renderTable(events);
         });
 
-        copyBtn.addEventListener('click', () => {
-            copyTableToClipboard();
-        });
-
         downloadExcel.addEventListener('click', () => {
             downloadAsExcel();
         });
@@ -426,146 +376,144 @@
             downloadAsCsv();
         });
 
-        async function loadPdfStructured(file) {
+        async function extractPdfText(file) {
             const arrayBuffer = await file.arrayBuffer();
             const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
             
-            const allItems = [];
-            
+            let fullText = '';
             for (let pageNum = 1; pageNum <= pdf.numPages; pageNum++) {
                 const page = await pdf.getPage(pageNum);
                 const textContent = await page.getTextContent();
                 
-                textContent.items.forEach(item => {
-                    allItems.push({
-                        text: item.str.trim(),
-                        x: Math.round(item.transform[4]),
-                        y: Math.round(item.transform[5]),
-                        height: item.height,
-                        page: pageNum
-                    });
-                });
+                const pageText = textContent.items.map(item => item.str).join('\n');
+                fullText += pageText + '\n';
             }
             
-            return allItems;
+            return fullText;
         }
 
-        function parseTableStructure(items) {
+        function parseEconomicCalendar(text) {
+            const lines = text.split('\n').map(l => l.trim()).filter(l => l.length > 0);
             const events = [];
-            
-            // Group items by Y position with tighter tolerance
-            const rowMap = new Map();
-            items.forEach(item => {
-                if (!item.text) return;
-                
-                let foundRow = false;
-                for (let [y, row] of rowMap) {
-                    if (Math.abs(y - item.y) <= 2) {
-                        row.push(item);
-                        foundRow = true;
-                        break;
-                    }
-                }
-                if (!foundRow) {
-                    rowMap.set(item.y, [item]);
-                }
-            });
-            
-            // Sort rows by Y position (top to bottom) and items within rows by X
-            const rows = Array.from(rowMap.entries())
-                .sort((a, b) => b[0] - a[0])
-                .map(([y, items]) => ({
-                    y: y,
-                    items: items.sort((a, b) => a.x - b.x)
-                }));
-            
             let currentDate = '';
             let currentRawDate = '';
-            let lastEventY = null;
+            let i = 0;
             
-            for (let i = 0; i < rows.length; i++) {
-                const row = rows[i];
-                const rowText = row.items.map(item => item.text).join(' ');
+            while (i < lines.length) {
+                const line = lines[i];
                 
-                // Skip noise
-                if (rowText.includes('Time') && rowText.includes('Cur.') && rowText.includes('Event')) continue;
-                if (rowText.includes('investing.com')) continue;
-                if (rowText.includes('Best time to enter')) continue;
-                if (rowText.includes('Try Now')) continue;
-                if (rowText.includes('Current Time')) continue;
-                if (rowText.includes('Legend')) break;
-                if (rowText.includes('Disclaimer')) break;
-                if (rowText.length < 3) continue;
+                // Stop at Legend
+                if (line === 'Legend' || line.includes('Disclaimer')) {
+                    break;
+                }
                 
-                // Check for date header
-                const dateMatch = rowText.match(/(Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday),?\s+([A-Z][a-z]+)\s+(\d{1,2}),?\s+(\d{4})/i);
-                if (dateMatch) {
-                    currentRawDate = dateMatch[0];
-                    currentDate = formatDateHeader(currentRawDate);
-                    lastEventY = null;
+                // Skip noise lines
+                if (line.includes('investing.com') || 
+                    line.includes('Economic Calendar') ||
+                    line.includes('Best time to enter') ||
+                    line.includes('Try Now') ||
+                    line.includes('Current Time') ||
+                    (line.includes('Time') && line.includes('Cur.') && line.includes('Event'))) {
+                    i++;
                     continue;
                 }
                 
-                if (!currentDate) continue;
+                // Check for date header
+                const dateMatch = line.match(/^(Sunday|Monday|Tuesday|Wednesday|Thursday|Friday|Saturday),\s+([A-Za-z]+)\s+(\d{1,2}),\s+(\d{4})$/);
+                if (dateMatch) {
+                    currentRawDate = line;
+                    currentDate = formatDateHeader(line);
+                    i++;
+                    continue;
+                }
                 
-                // Parse event from this row
-                const event = parseEventRow(row.items, currentRawDate, currentDate);
-                if (event) {
-                    events.push(event);
-                    lastEventY = row.y;
+                if (!currentDate) {
+                    i++;
+                    continue;
+                }
+                
+                // Check if line starts with time (HH:MM)
+                if (/^\d{2}:\d{2}$/.test(line)) {
+                    const time = line;
+                    i++;
+                    
+                    // Next line should be currency
+                    if (i >= lines.length) break;
+                    const currency = lines[i];
+                    if (!/^[A-Z]{3}$/.test(currency)) {
+                        continue;
+                    }
+                    i++;
+                    
+                    // Collect event name lines until we hit values or next time
+                    const eventLines = [];
+                    while (i < lines.length) {
+                        const nextLine = lines[i];
+                        
+                        // Stop if we hit next time or date
+                        if (/^\d{2}:\d{2}$/.test(nextLine) || 
+                            /^(Sunday|Monday|Tuesday|Wednesday|Thursday|Friday|Saturday),/.test(nextLine)) {
+                            break;
+                        }
+                        
+                        // Stop if we hit noise
+                        if (nextLine.includes('Best time') || 
+                            nextLine === 'Legend' ||
+                            nextLine.includes('Try Now')) {
+                            break;
+                        }
+                        
+                        eventLines.push(nextLine);
+                        i++;
+                        
+                        // Check if this line contains numeric values - if so, this is the last line
+                        if (/\d+\.?\d*[%BKM]?/.test(nextLine)) {
+                            break;
+                        }
+                    }
+                    
+                    if (eventLines.length === 0) continue;
+                    
+                    // Parse event and values from collected lines
+                    const event = parseEventFromLines(eventLines, time, currency, currentRawDate, currentDate);
+                    if (event) {
+                        events.push(event);
+                    }
+                } else {
+                    i++;
                 }
             }
             
             return events;
         }
 
-        function parseEventRow(rowItems, rawDateHeader, displayDate) {
-            const texts = rowItems.map(item => item.text);
+        function parseEventFromLines(lines, time, currency, rawDateHeader, displayDate) {
+            // Join all lines
+            const fullText = lines.join(' ').trim();
             
-            if (texts.length < 3) return null;
-            
-            // First item should be time
-            const timeMatch = texts[0].match(/^\d{2}:\d{2}$/);
-            if (!timeMatch) return null;
-            const time = texts[0];
-            
-            // Second item should be currency
-            let currency = '';
-            let currencyIndex = -1;
-            for (let i = 1; i < Math.min(5, texts.length); i++) {
-                if (/^[A-Z]{3}$/.test(texts[i])) {
-                    currency = texts[i];
-                    currencyIndex = i;
-                    break;
-                }
-            }
-            
-            if (!currency) return null;
-            
-            // Get country label (remove currency from output)
-            const countryLabel = getCountryLabel(currency, texts.slice(currencyIndex + 1).join(' '));
-            
-            // Everything after currency: filter out stars and extract
-            const remainingTexts = texts.slice(currencyIndex + 1)
-                .filter(text => !text.match(/^[★☆✰✩]+$/));
-            
-            if (remainingTexts.length === 0) return null;
-            
-            // Find where values start from the end
+            // Extract values from the end (up to 3 numeric values)
+            const tokens = fullText.split(/\s+/);
             const values = [];
-            let valueStartIndex = remainingTexts.length;
+            let valueEndIndex = tokens.length;
             
-            for (let i = remainingTexts.length - 1; i >= 0 && values.length < 3; i--) {
-                const text = remainingTexts[i];
-                // Check if this is a numeric value
-                if (/^-?\d+\.?\d*[%BKM]?$/.test(text)) {
-                    values.unshift(text);
-                    valueStartIndex = i;
+            for (let i = tokens.length - 1; i >= 0 && values.length < 3; i--) {
+                const token = tokens[i];
+                if (/^-?\d+\.?\d*[%BKM]?$/.test(token)) {
+                    values.unshift(token);
+                    valueEndIndex = i;
                 } else if (values.length > 0) {
-                    // Stop when we hit non-value after finding values
                     break;
                 }
             }
+            
+            // Event name is everything before the values
+            const eventTokens = tokens.slice(0, valueEndIndex);
+            const eventName = eventTokens.join(' ').trim();
+            
+            if (!eventName) return null;
+            
+            // Get country label
+            const countryLabel = getCountryLabel(currency, eventName);
             
             // Assign values
             let actual = '-';
@@ -576,16 +524,11 @@
             if (values.length >= 2) forecast = values[values.length - 2];
             if (values.length >= 3) previous = values[values.length - 3];
             
-            // Event name is everything before the values
-            const eventParts = remainingTexts.slice(0, valueStartIndex);
-            const eventName = eventParts.join(' ').trim();
-            
-            if (!eventName) return null;
-            
             return {
                 rawDateHeader,
                 displayDate,
                 time,
+                currency,
                 countryLabel,
                 eventName,
                 actual,
@@ -595,7 +538,7 @@
         }
 
         function formatDateHeader(dateStr) {
-            const match = dateStr.match(/(\w+),?\s+(\w+)\s+(\d{1,2}),?\s+(\d{4})/i);
+            const match = dateStr.match(/(Sunday|Monday|Tuesday|Wednesday|Thursday|Friday|Saturday),\s+([A-Za-z]+)\s+(\d{1,2}),\s+(\d{4})/);
             if (!match) return dateStr;
 
             const month = match[2];
@@ -652,17 +595,29 @@
         function renderTable(events) {
             if (events.length === 0) return;
 
+            // Remove all rows except header
+            while (tableWrapper.children.length > 1) {
+                tableWrapper.removeChild(tableWrapper.lastChild);
+            }
+
             const groupDates = groupDatesCheckbox.checked;
             let lastDisplayDate = '';
 
-            tableBody.innerHTML = '';
-            const deleteButtons = deleteColumn.querySelectorAll('.delete-cell');
-            deleteButtons.forEach(btn => btn.remove());
-
             events.forEach((event, index) => {
-                const row = document.createElement('tr');
+                const row = document.createElement('div');
+                row.className = 'table-row';
                 
-                const dateCell = document.createElement('td');
+                const deleteCell = document.createElement('div');
+                deleteCell.className = 'delete-cell';
+                const deleteBtn = document.createElement('button');
+                deleteBtn.className = 'delete-btn';
+                deleteBtn.textContent = '×';
+                deleteBtn.onclick = () => deleteEvent(index);
+                deleteCell.appendChild(deleteBtn);
+                row.appendChild(deleteCell);
+
+                const dateCell = document.createElement('div');
+                dateCell.className = 'data-cell';
                 if (groupDates) {
                     if (event.displayDate !== lastDisplayDate) {
                         dateCell.textContent = event.displayDate;
@@ -673,24 +628,17 @@
                 }
                 row.appendChild(dateCell);
 
-                const eventCell = document.createElement('td');
+                const eventCell = document.createElement('div');
+                eventCell.className = 'data-cell';
                 eventCell.textContent = `${event.countryLabel} ${event.eventName}`;
                 row.appendChild(eventCell);
 
-                const afpCell = document.createElement('td');
+                const afpCell = document.createElement('div');
+                afpCell.className = 'data-cell';
                 afpCell.textContent = `${event.actual} vs ${event.forecast} vs ${event.previous}`;
                 row.appendChild(afpCell);
 
-                tableBody.appendChild(row);
-
-                const deleteCell = document.createElement('div');
-                deleteCell.className = 'delete-cell';
-                const deleteBtn = document.createElement('button');
-                deleteBtn.className = 'delete-btn';
-                deleteBtn.textContent = '×';
-                deleteBtn.onclick = () => deleteEvent(index);
-                deleteCell.appendChild(deleteBtn);
-                deleteColumn.appendChild(deleteCell);
+                tableWrapper.appendChild(row);
             });
 
             showTable();
@@ -706,22 +654,6 @@
                 hideControls();
                 hideActionButtons();
             }
-        }
-
-        function copyTableToClipboard() {
-            const range = document.createRange();
-            range.selectNode(eventsTable);
-            window.getSelection().removeAllRanges();
-            window.getSelection().addRange(range);
-            
-            try {
-                document.execCommand('copy');
-                alert('Table copied to clipboard! You can now paste it into PowerPoint.');
-            } catch (err) {
-                alert('Failed to copy table. Please select the table manually and use Ctrl+C.');
-            }
-            
-            window.getSelection().removeAllRanges();
         }
 
         function downloadAsExcel() {
