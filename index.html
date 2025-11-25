@@ -376,9 +376,9 @@
             hideActionButtons();
 
             try {
-                const pdfData = await extractPdfText(file);
-                console.log('PDF data:', pdfData);
-                const allEvents = parseEconomicCalendar(pdfData);
+                const rawText = await extractPdfText(file);
+                console.log('Raw text:', rawText);
+                const allEvents = parseEconomicCalendar(rawText);
                 
                 // Filter events
                 const filtered = filterEvents(allEvents);
@@ -430,21 +430,16 @@
             const arrayBuffer = await file.arrayBuffer();
             const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
             
-            const allData = [];
+            let fullText = '';
             for (let pageNum = 1; pageNum <= pdf.numPages; pageNum++) {
                 const page = await pdf.getPage(pageNum);
                 const textContent = await page.getTextContent();
                 
-                textContent.items.forEach(item => {
-                    allData.push({
-                        text: item.str.trim(),
-                        x: Math.round(item.transform[4]),
-                        y: Math.round(item.transform[5])
-                    });
-                });
+                const pageText = textContent.items.map(item => item.str).join('\n');
+                fullText += pageText + '\n';
             }
             
-            return allData;
+            return fullText;
         }
 
         function parseEconomicCalendar(text) {
