@@ -93,6 +93,24 @@
             cursor: not-allowed;
         }
 
+        .action-buttons {
+            display: none;
+            gap: 10px;
+            margin: 20px 0;
+        }
+
+        .action-buttons.visible {
+            display: flex;
+        }
+
+        .action-buttons button {
+            background: #28a745;
+        }
+
+        .action-buttons button:hover {
+            background: #218838;
+        }
+
         .controls {
             margin: 20px 0;
             padding: 15px;
@@ -150,20 +168,64 @@
             display: block;
         }
 
-        .table-wrapper {
-            overflow-x: auto;
+        .table-container {
+            display: none;
             margin-top: 20px;
+        }
+
+        .table-container.visible {
+            display: block;
+        }
+
+        .table-wrapper {
+            display: flex;
+            gap: 0;
+            align-items: stretch;
+        }
+
+        .delete-column {
+            display: flex;
+            flex-direction: column;
+            background: #f8f9fa;
+            border: 1px solid #ddd;
+            border-right: none;
+        }
+
+        .delete-header {
+            padding: 14px 8px;
+            background: #e9ecef;
+            border-bottom: 1px solid #ddd;
+            text-align: center;
+            font-weight: 600;
+            font-size: 13px;
+            min-height: 51px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .delete-cell {
+            padding: 8px;
+            border-bottom: 1px solid #ddd;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            min-height: 49px;
+        }
+
+        .delete-cell:last-child {
+            border-bottom: none;
+        }
+
+        .data-table-wrapper {
+            flex: 1;
+            overflow-x: auto;
         }
 
         table {
             width: 100%;
             border-collapse: collapse;
             background: white;
-            display: none;
-        }
-
-        table.visible {
-            display: table;
         }
 
         thead {
@@ -180,11 +242,6 @@
         }
 
         th:first-child {
-            width: 60px;
-            text-align: center;
-        }
-
-        th:nth-child(2) {
             width: 140px;
         }
 
@@ -262,6 +319,12 @@
         <div class="error" id="error"></div>
         <div class="summary" id="summary"></div>
 
+        <div class="action-buttons" id="actionButtons">
+            <button id="copyBtn">Copy Table</button>
+            <button id="downloadExcel">Download Excel</button>
+            <button id="downloadCsv">Download CSV</button>
+        </div>
+
         <div class="controls" id="controls">
             <div class="checkbox-wrapper">
                 <input type="checkbox" id="groupDates" checked>
@@ -269,24 +332,29 @@
             </div>
         </div>
 
-        <div class="table-wrapper">
-            <table id="eventsTable">
-                <thead>
-                    <tr>
-                        <th>Delete</th>
-                        <th>Date</th>
-                        <th>Event</th>
-                        <th>Actual vs. Forecast vs. Previous</th>
-                    </tr>
-                </thead>
-                <tbody id="tableBody">
-                </tbody>
-            </table>
+        <div class="table-container" id="tableContainer">
+            <div class="table-wrapper">
+                <div class="delete-column" id="deleteColumn">
+                    <div class="delete-header">Del</div>
+                </div>
+                <div class="data-table-wrapper">
+                    <table id="eventsTable">
+                        <thead>
+                            <tr>
+                                <th>Date</th>
+                                <th>Event</th>
+                                <th>Actual vs. Forecast vs. Previous</th>
+                            </tr>
+                        </thead>
+                        <tbody id="tableBody">
+                        </tbody>
+                    </table>
+                </div>
+            </div>
         </div>
     </div>
 
     <script>
-        // Set up PDF.js worker
         pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
 
         let events = [];
@@ -296,9 +364,15 @@
         const error = document.getElementById('error');
         const summary = document.getElementById('summary');
         const controls = document.getElementById('controls');
+        const actionButtons = document.getElementById('actionButtons');
+        const tableContainer = document.getElementById('tableContainer');
         const eventsTable = document.getElementById('eventsTable');
         const tableBody = document.getElementById('tableBody');
+        const deleteColumn = document.getElementById('deleteColumn');
         const groupDatesCheckbox = document.getElementById('groupDates');
+        const copyBtn = document.getElementById('copyBtn');
+        const downloadExcel = document.getElementById('downloadExcel');
+        const downloadCsv = document.getElementById('downloadCsv');
 
         pdfFileInput.addEventListener('change', (e) => {
             parseBtn.disabled = !e.target.files.length;
@@ -313,6 +387,7 @@
             hideSummary();
             hideTable();
             hideControls();
+            hideActionButtons();
 
             try {
                 const pdfData = await loadPdfStructured(file);
@@ -325,6 +400,7 @@
                     showSummary(`Parsed ${events.length} events.`);
                     renderTable(events);
                     showControls();
+                    showActionButtons();
                 }
             } catch (err) {
                 console.error('Error processing PDF:', err);
@@ -338,7 +414,18 @@
             renderTable(events);
         });
 
-        // Load PDF with positional data preserved
+        copyBtn.addEventListener('click', () => {
+            copyTableToClipboard();
+        });
+
+        downloadExcel.addEventListener('click', () => {
+            downloadAsExcel();
+        });
+
+        downloadCsv.addEventListener('click', () => {
+            downloadAsCsv();
+        });
+
         async function loadPdfStructured(file) {
             const arrayBuffer = await file.arrayBuffer();
             const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
@@ -349,7 +436,6 @@
                 const page = await pdf.getPage(pageNum);
                 const textContent = await page.getTextContent();
                 
-                // Keep items with their position data
                 textContent.items.forEach(item => {
                     allItems.push({
                         text: item.str.trim(),
@@ -363,16 +449,13 @@
             return allItems;
         }
 
-        // Parse table structure from positioned text items
         function parseTableStructure(items) {
             const events = [];
             
-            // Group items by Y position (rows)
             const rowMap = new Map();
             items.forEach(item => {
                 if (!item.text) return;
                 
-                // Group items that are on the same Y level (within 3px tolerance)
                 let foundRow = false;
                 for (let [y, row] of rowMap) {
                     if (Math.abs(y - item.y) <= 3) {
@@ -386,50 +469,66 @@
                 }
             });
             
-            // Sort rows by Y position (top to bottom)
             const rows = Array.from(rowMap.entries())
-                .sort((a, b) => b[0] - a[0])  // Higher Y = top of page
-                .map(([y, items]) => {
-                    // Sort items in row by X position (left to right)
-                    return items.sort((a, b) => a.x - b.x);
-                });
+                .sort((a, b) => b[0] - a[0])
+                .map(([y, items]) => items.sort((a, b) => a.x - b.x));
             
             let currentDate = '';
             let currentRawDate = '';
+            let pendingEvent = null;
             
             for (let i = 0; i < rows.length; i++) {
                 const row = rows[i];
                 const rowText = row.map(item => item.text).join(' ');
                 
-                // Skip header rows and noise
                 if (rowText.includes('Time') && rowText.includes('Cur.') && rowText.includes('Event')) continue;
                 if (rowText.includes('investing.com')) continue;
                 if (rowText.includes('Best time to enter')) continue;
                 if (rowText.includes('Try Now')) continue;
                 if (rowText.includes('Current Time')) continue;
-                if (rowText.includes('Legend')) break; // Stop at legend
+                if (rowText.includes('Legend')) break;
                 if (rowText.includes('Disclaimer')) break;
                 if (rowText.length < 5) continue;
                 
-                // Check for date header
                 const dateMatch = rowText.match(/(Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday),?\s+([A-Z][a-z]+)\s+(\d{1,2}),?\s+(\d{4})/i);
                 if (dateMatch) {
                     currentRawDate = dateMatch[0];
                     currentDate = formatDateHeader(currentRawDate);
+                    pendingEvent = null;
                     continue;
                 }
                 
                 if (!currentDate) continue;
                 
-                // Try to parse as event row
-                // Expected structure: Time | Currency | Event Name | Actual | Forecast | Previous
-                const event = parseEventRow(row, currentRawDate, currentDate);
-                if (event) {
+                const event = parseEventRow(row, currentRawDate, currentDate, rows, i);
+                
+                if (event && event.isComplete) {
+                    if (pendingEvent) {
+                        event.eventName = pendingEvent.eventName + ' ' + event.eventName;
+                    }
                     events.push(event);
+                    pendingEvent = null;
+                } else if (event && !event.isComplete) {
+                    pendingEvent = event;
+                } else if (pendingEvent) {
+                    const continuationText = row.map(item => item.text)
+                        .filter(text => !text.match(/^[★☆✰✩]+$/))
+                        .join(' ');
+                    
+                    const values = extractValuesFromText(continuationText);
+                    if (values.length > 0) {
+                        if (values.length >= 1) pendingEvent.actual = values[values.length - 1];
+                        if (values.length >= 2) pendingEvent.forecast = values[values.length - 2];
+                        if (values.length >= 3) pendingEvent.previous = values[values.length - 3];
+                        pendingEvent.isComplete = true;
+                        events.push(pendingEvent);
+                        pendingEvent = null;
+                    } else if (continuationText.trim().length > 0) {
+                        pendingEvent.eventName += ' ' + continuationText.trim();
+                    }
                 }
             }
             
-            // Sort by date then time
             events.sort((a, b) => {
                 if (a.rawDateHeader !== b.rawDateHeader) {
                     return new Date(a.rawDateHeader) - new Date(b.rawDateHeader);
@@ -440,20 +539,31 @@
             return events;
         }
 
-        // Parse a single event row from positioned items
-        function parseEventRow(rowItems, rawDateHeader, displayDate) {
-            const texts = rowItems.map(item => item.text);
-            const fullText = texts.join(' ');
+        function extractValuesFromText(text) {
+            const tokens = text.trim().split(/\s+/);
+            const values = [];
             
-            // Must have at least time and currency
+            for (let i = tokens.length - 1; i >= 0 && values.length < 3; i--) {
+                const token = tokens[i];
+                if (/^-?\d+\.?\d*[%BKM]?$/.test(token)) {
+                    values.unshift(token);
+                } else if (values.length > 0) {
+                    break;
+                }
+            }
+            
+            return values;
+        }
+
+        function parseEventRow(rowItems, rawDateHeader, displayDate, allRows, currentIndex) {
+            const texts = rowItems.map(item => item.text);
+            
             if (texts.length < 2) return null;
             
-            // First item should be time
             const timeMatch = texts[0].match(/^\d{2}:\d{2}$/);
             if (!timeMatch) return null;
             const time = texts[0];
             
-            // Find currency (3-letter code like USD, EUR, GBP, etc.)
             let currencyIndex = -1;
             let currency = '';
             for (let i = 1; i < Math.min(5, texts.length); i++) {
@@ -466,53 +576,29 @@
             
             if (!currency) return null;
             
-            // Extract values from the end (Actual, Forecast, Previous)
-            const values = [];
-            for (let i = texts.length - 1; i > currencyIndex; i--) {
-                const text = texts[i];
-                // Check if this looks like a value
-                if (/^-?\d+\.?\d*[%BKM]?$/.test(text) || text === '-') {
-                    values.unshift(text);
-                    if (values.length >= 3) break;
-                } else if (values.length > 0) {
-                    // Once we start finding values and hit non-value, stop
-                    break;
-                }
-            }
+            const remainingTexts = texts.slice(currencyIndex + 1)
+                .filter(text => !text.match(/^[★☆✰✩]+$/));
+            
+            const values = extractValuesFromText(remainingTexts.join(' '));
             
             let actual = '-';
             let forecast = '-';
             let previous = '-';
             
-            // Assign values based on how many we found
             if (values.length >= 1) actual = values[values.length - 1];
             if (values.length >= 2) forecast = values[values.length - 2];
             if (values.length >= 3) previous = values[values.length - 3];
             
-            // Everything between currency and values is the event name
-            const eventStartIndex = currencyIndex + 1;
-            const eventEndIndex = texts.length - values.length;
-            
-            if (eventStartIndex >= eventEndIndex) {
-                // No event name found, might be on next line
-                return null;
+            const eventParts = [];
+            for (let i = 0; i < remainingTexts.length; i++) {
+                const text = remainingTexts[i];
+                if (values.includes(text)) {
+                    break;
+                }
+                eventParts.push(text);
             }
             
-            const eventParts = texts.slice(eventStartIndex, eventEndIndex);
-            
-            // Filter out star symbols and other noise
-            const cleanEventParts = eventParts.filter(part => 
-                !part.match(/^[★☆✰✩]+$/) && 
-                part !== '(' && 
-                part !== ')' &&
-                part.length > 0
-            );
-            
-            if (cleanEventParts.length === 0) return null;
-            
-            const eventName = cleanEventParts.join(' ');
-            
-            // Get country label
+            const eventName = eventParts.join(' ').trim();
             const countryLabel = getCountryLabel(currency, eventName);
             
             return {
@@ -521,10 +607,11 @@
                 time,
                 currency,
                 countryLabel,
-                eventName,
+                eventName: eventName || '',
                 actual,
                 forecast,
-                previous
+                previous,
+                isComplete: eventName.length > 0 && values.length > 0
             };
         }
 
@@ -590,19 +677,12 @@
             let lastDisplayDate = '';
 
             tableBody.innerHTML = '';
+            const deleteButtons = deleteColumn.querySelectorAll('.delete-cell');
+            deleteButtons.forEach(btn => btn.remove());
 
             events.forEach((event, index) => {
                 const row = document.createElement('tr');
                 
-                const deleteCell = document.createElement('td');
-                deleteCell.style.textAlign = 'center';
-                const deleteBtn = document.createElement('button');
-                deleteBtn.className = 'delete-btn';
-                deleteBtn.textContent = '×';
-                deleteBtn.onclick = () => deleteEvent(index);
-                deleteCell.appendChild(deleteBtn);
-                row.appendChild(deleteCell);
-
                 const dateCell = document.createElement('td');
                 if (groupDates) {
                     if (event.displayDate !== lastDisplayDate) {
@@ -623,6 +703,15 @@
                 row.appendChild(afpCell);
 
                 tableBody.appendChild(row);
+
+                const deleteCell = document.createElement('div');
+                deleteCell.className = 'delete-cell';
+                const deleteBtn = document.createElement('button');
+                deleteBtn.className = 'delete-btn';
+                deleteBtn.textContent = '×';
+                deleteBtn.onclick = () => deleteEvent(index);
+                deleteCell.appendChild(deleteBtn);
+                deleteColumn.appendChild(deleteCell);
             });
 
             showTable();
@@ -636,7 +725,84 @@
             if (events.length === 0) {
                 hideTable();
                 hideControls();
+                hideActionButtons();
             }
+        }
+
+        function copyTableToClipboard() {
+            const range = document.createRange();
+            range.selectNode(eventsTable);
+            window.getSelection().removeAllRanges();
+            window.getSelection().addRange(range);
+            
+            try {
+                document.execCommand('copy');
+                alert('Table copied to clipboard! You can now paste it into PowerPoint.');
+            } catch (err) {
+                alert('Failed to copy table. Please select the table manually and use Ctrl+C.');
+            }
+            
+            window.getSelection().removeAllRanges();
+        }
+
+        function downloadAsExcel() {
+            const csv = generateCsvContent('\t');
+            const blob = new Blob([csv], { type: 'application/vnd.ms-excel' });
+            downloadFile(blob, 'macro-calendar.xls');
+        }
+
+        function downloadAsCsv() {
+            const csv = generateCsvContent(',');
+            const blob = new Blob([csv], { type: 'text/csv' });
+            downloadFile(blob, 'macro-calendar.csv');
+        }
+
+        function generateCsvContent(delimiter) {
+            const groupDates = groupDatesCheckbox.checked;
+            let lastDisplayDate = '';
+            
+            let csv = ['Date', 'Event', 'Actual vs. Forecast vs. Previous'].join(delimiter) + '\n';
+            
+            events.forEach(event => {
+                let dateValue = '';
+                if (groupDates) {
+                    if (event.displayDate !== lastDisplayDate) {
+                        dateValue = event.displayDate;
+                        lastDisplayDate = event.displayDate;
+                    }
+                } else {
+                    dateValue = event.displayDate;
+                }
+                
+                const eventValue = `${event.countryLabel} ${event.eventName}`;
+                const afpValue = `${event.actual} vs ${event.forecast} vs ${event.previous}`;
+                
+                csv += [
+                    escapeCSV(dateValue),
+                    escapeCSV(eventValue),
+                    escapeCSV(afpValue)
+                ].join(delimiter) + '\n';
+            });
+            
+            return csv;
+        }
+
+        function escapeCSV(value) {
+            if (value.includes(',') || value.includes('"') || value.includes('\n')) {
+                return '"' + value.replace(/"/g, '""') + '"';
+            }
+            return value;
+        }
+
+        function downloadFile(blob, filename) {
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = filename;
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            URL.revokeObjectURL(url);
         }
 
         function showLoading(show) {
@@ -662,11 +828,11 @@
         }
 
         function showTable() {
-            eventsTable.classList.add('visible');
+            tableContainer.classList.add('visible');
         }
 
         function hideTable() {
-            eventsTable.classList.remove('visible');
+            tableContainer.classList.remove('visible');
         }
 
         function showControls() {
@@ -675,6 +841,14 @@
 
         function hideControls() {
             controls.classList.remove('visible');
+        }
+
+        function showActionButtons() {
+            actionButtons.classList.add('visible');
+        }
+
+        function hideActionButtons() {
+            actionButtons.classList.remove('visible');
         }
     </script>
 </body>
