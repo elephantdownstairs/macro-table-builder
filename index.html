@@ -376,9 +376,9 @@
             hideActionButtons();
 
             try {
-                const pdfItems = await extractPdfText(file);
-                console.log('PDF items:', pdfItems);
-                const allEvents = parseEconomicCalendar(pdfItems);
+                const rawText = await extractPdfText(file);
+                console.log('Raw text:', rawText);
+                const allEvents = parseEconomicCalendar(rawText);
                 
                 // Filter events
                 const filtered = filterEvents(allEvents);
@@ -430,130 +430,161 @@
             const arrayBuffer = await file.arrayBuffer();
             const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
             
-            const allItems = [];
+            let fullText = '';
             for (let pageNum = 1; pageNum <= pdf.numPages; pageNum++) {
                 const page = await pdf.getPage(pageNum);
                 const textContent = await page.getTextContent();
                 
-                textContent.items.forEach(item => {
-                    allItems.push({
-                        text: item.str.trim(),
-                        x: Math.round(item.transform[4]),
-                        y: Math.round(item.transform[5])
-                    });
-                });
+                const pageText = textContent.items.map(item => item.str).join('\n');
+                fullText += pageText + '\n';
             }
             
-            return allItems;
+            return fullText;
         }
 
-        function parseEconomicCalendar(items) {
+        function parseEconomicCalendar(text) {
+            const lines = text.split('\n').map(l => l.trim()).filter(l => l.length > 0);
             const events = [];
-            
-            // Group items by Y coordinate to find rows
-            const rowMap = new Map();
-            items.forEach(item => {
-                if (!item.text) return;
-                
-                let foundRow = false;
-                for (let [y, row] of rowMap) {
-                    if (Math.abs(y - item.y) <= 2) {
-                        row.push(item);
-                        foundRow = true;
-                        break;
-                    }
-                }
-                if (!foundRow) {
-                    rowMap.set(item.y, [item]);
-                }
-            });
-            
-            // Sort rows top to bottom
-            const rows = Array.from(rowMap.values())
-                .sort((a, b) => Math.max(...b.map(i => i.y)) - Math.max(...a.map(i => i.y)))
-                .map(row => row.sort((a, b) => a.x - b.x));
-            
             let currentDate = '';
             let currentRawDate = '';
+            let i = 0;
             
-            for (let rowIdx = 0; rowIdx < rows.length; rowIdx++) {
-                const row = rows[rowIdx];
-                const texts = row.map(item => item.text);
-                const fullText = texts.join(' ');
+            while (i < lines.length) {
+                const line = lines[i];
                 
-                // Skip noise
-                if (fullText.includes('Legend') || fullText.includes('Disclaimer')) break;
-                if (fullText.includes('investing.com') || 
-                    fullText.includes('Best time') || 
-                    fullText.includes('Try Now') ||
-                    fullText.includes('Current Time') ||
-                    (fullText.includes('Time') && fullText.includes('Cur.'))) continue;
+                // Stop at Legend
+                if (line === 'Legend' || line.includes('Disclaimer')) {
+                    break;
+                }
                 
-                // Check for date
-                const dateMatch = fullText.match(/(Sunday|Monday|Tuesday|Wednesday|Thursday|Friday|Saturday),\s+([A-Za-z]+)\s+(\d{1,2}),\s+(\d{4})/);
-                if (dateMatch) {
-                    currentRawDate = dateMatch[0];
-                    currentDate = formatDateHeader(currentRawDate);
+                // Skip noise lines
+                if (line.includes('investing.com') || 
+                    line.includes('Economic Calendar') ||
+                    line.includes('Best time to enter') ||
+                    line.includes('Try Now') ||
+                    line.includes('Current Time') ||
+                    (line.includes('Time') && line.includes('Cur.') && line.includes('Event'))) {
+                    i++;
                     continue;
                 }
                 
-                if (!currentDate || texts.length < 3) continue;
-                
-                // Check if row starts with time
-                if (!/^\d{2}:\d{2}$/.test(texts[0])) continue;
-                
-                const time = texts[0];
-                
-                // Find currency
-                let currency = '';
-                for (let i = 1; i < Math.min(3, texts.length); i++) {
-                    if (/^[A-Z]{3}$/.test(texts[i])) {
-                        currency = texts[i];
-                        break;
-                    }
+                // Check for date header
+                const dateMatch = line.match(/^(Sunday|Monday|Tuesday|Wednesday|Thursday|Friday|Saturday),\s+([A-Za-z]+)\s+(\d{1,2}),\s+(\d{4})$/);
+                if (dateMatch) {
+                    currentRawDate = line;
+                    currentDate = formatDateHeader(line);
+                    i++;
+                    continue;
                 }
                 
-                if (!currency) continue;
+                if (!currentDate) {
+                    i++;
+                    continue;
+                }
                 
-                // Extract values based on X position (column alignment)
-                // Actual column: X ~750-850, Forecast: X ~850-950, Previous: X ~950+
-                const actualItems = row.filter(item => item.x >= 750 && item.x < 850 && /^-?\d+\.?\d*[%BKM]?$/.test(item.text));
-                const forecastItems = row.filter(item => item.x >= 850 && item.x < 950 && /^-?\d+\.?\d*[%BKM]?$/.test(item.text));
-                const previousItems = row.filter(item => item.x >= 950 && /^-?\d+\.?\d*[%BKM]?$/.test(item.text));
-                
-                const actual = actualItems.length > 0 ? actualItems[0].text : '-';
-                const forecast = forecastItems.length > 0 ? forecastItems[0].text : '-';
-                const previous = previousItems.length > 0 ? previousItems[0].text : '-';
-                
-                // Event name: everything between currency and value columns (X < 750)
-                const eventItems = row.filter(item => {
-                    const isCurrency = item.text === currency;
-                    const isTime = item.text === time;
-                    const isInValueColumn = item.x >= 750;
-                    const isStar = /^[★☆✰✩]+$/.test(item.text);
-                    return !isCurrency && !isTime && !isInValueColumn && !isStar && item.text.length > 0;
-                });
-                
-                const eventName = eventItems.map(item => item.text).join(' ').trim();
-                
-                if (!eventName) continue;
-                
-                const countryLabel = getCountryLabel(currency, eventName);
-                
-                events.push({
-                    rawDateHeader: currentRawDate,
-                    displayDate: currentDate,
-                    time,
-                    currency,
-                    countryLabel,
-                    eventName,
-                    actual,
-                    forecast,
-                    previous
-                });
+                // Check if line starts with time (HH:MM)
+                if (/^\d{2}:\d{2}$/.test(line)) {
+                    const time = line;
+                    i++;
+                    
+                    // Next line should be currency
+                    if (i >= lines.length) break;
+                    const currency = lines[i];
+                    if (!/^[A-Z]{3}$/.test(currency)) {
+                        continue;
+                    }
+                    i++;
+                    
+                    // Collect event name lines until we hit values or next time
+                    const eventLines = [];
+                    while (i < lines.length) {
+                        const nextLine = lines[i];
+                        
+                        // Stop if we hit next time or date
+                        if (/^\d{2}:\d{2}$/.test(nextLine) || 
+                            /^(Sunday|Monday|Tuesday|Wednesday|Thursday|Friday|Saturday),/.test(nextLine)) {
+                            break;
+                        }
+                        
+                        // Stop if we hit noise
+                        if (nextLine.includes('Best time') || 
+                            nextLine === 'Legend' ||
+                            nextLine.includes('Try Now')) {
+                            break;
+                        }
+                        
+                        eventLines.push(nextLine);
+                        i++;
+                        
+                        // Check if this line contains numeric values - if so, this is the last line
+                        if (/\d+\.?\d*[%BKM]?/.test(nextLine)) {
+                            break;
+                        }
+                    }
+                    
+                    if (eventLines.length === 0) continue;
+                    
+                    // Parse event and values from collected lines
+                    const event = parseEventFromLines(eventLines, time, currency, currentRawDate, currentDate);
+                    if (event) {
+                        events.push(event);
+                    }
+                } else {
+                    i++;
+                }
             }
             
             return events;
+        }
+
+        function parseEventFromLines(lines, time, currency, rawDateHeader, displayDate) {
+            // Join all lines
+            const fullText = lines.join(' ').trim();
+            
+            // Extract values from the end (up to 3 numeric values)
+            const tokens = fullText.split(/\s+/);
+            const values = [];
+            let valueEndIndex = tokens.length;
+            
+            for (let i = tokens.length - 1; i >= 0 && values.length < 3; i--) {
+                const token = tokens[i];
+                if (/^-?\d+\.?\d*[%BKM]?$/.test(token)) {
+                    values.unshift(token);
+                    valueEndIndex = i;
+                } else if (values.length > 0) {
+                    break;
+                }
+            }
+            
+            // Event name is everything before the values
+            const eventTokens = tokens.slice(0, valueEndIndex);
+            const eventName = eventTokens.join(' ').trim();
+            
+            if (!eventName) return null;
+            
+            // Get country label
+            const countryLabel = getCountryLabel(currency, eventName);
+            
+            // Assign values
+            let actual = '-';
+            let forecast = '-';
+            let previous = '-';
+            
+            if (values.length >= 1) actual = values[values.length - 1];
+            if (values.length >= 2) forecast = values[values.length - 2];
+            if (values.length >= 3) previous = values[values.length - 3];
+            
+            return {
+                rawDateHeader,
+                displayDate,
+                time,
+                currency,
+                countryLabel,
+                eventName,
+                actual,
+                forecast,
+                previous
+            };
         }
 
         function filterEvents(allEvents) {
